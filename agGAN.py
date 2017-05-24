@@ -605,6 +605,9 @@ class agGAN(object):
 
         imsave(os.path.join(sample_dir, name), frame)
 
+    def test(self):
+        pass
+
 
 
 
