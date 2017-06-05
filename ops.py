@@ -6,6 +6,7 @@ import tensorflow as tf
 import numpy as np
 from scipy.misc import imread, imresize, imsave
 import os
+import itertools
 
 def conv2d(input_map, num_output_channels, size_kernel=5, stride=2, name='conv2d'):
     with tf.variable_scope(name):
@@ -104,8 +105,52 @@ def get_dataset(img_dir, list_file):
                 age = 6
             img_path = os.path.join(img_dir, img_name)
             dataset.append(img_path + ' ' + id + ' ' + str(age))
-        #print(dataset)
     return dataset
+
+def get_dataset_pair(img_dir, list_file):
+    """return a list that each row contain a pair of image_path, id and age label"""
+    dataset = []
+    id_list = []
+    age_list = []
+    with open(list_file, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            line = line.strip()
+            split = line.split(' ')
+            img_name = split[0]
+            id = split[1]
+            id_list.append(int(id))
+            age = int(split[2])
+            if 16 <= age <= 20:
+                age = 0
+            elif 21 <= age <= 30:
+                age = 1
+            elif 31 <= age <= 40:
+                age = 2
+            elif 41 <= age <= 50:
+                age = 3
+            elif 51 <= age <= 60:
+                age = 4
+            elif 61 <= age <= 70:
+                age = 5
+            else:
+                age = 6
+            age_list.append(age)
+            img_path = os.path.join(img_dir, img_name)
+            dataset.append(img_path + ' ' + id + ' ' + str(age))
+
+    id_list = np.array(id_list)
+    a_p = []
+    dataset_pair = []
+    for label in np.unique(id_list):
+        a_p.extend(list(itertools.permutations(np.where(id_list==label)[0], 2)))
+    
+    for a, p in a_p:
+        if age_list[a] != age_list[p]:
+            dataset_pair.append(dataset[a] + ' ' + dataset[p])
+            
+    #print(len(dataset_pair))
+    return dataset_pair
 
 def transform(image):
     #[0, 1]->[-1, 1]

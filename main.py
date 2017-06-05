@@ -15,7 +15,7 @@ from agGAN import agGAN
 
 flags = tf.app.flags
 flags.DEFINE_integer("seed", None, "random seed")
-flags.DEFINE_integer("epoch", 50, "number of epochs")
+flags.DEFINE_integer("epoch", 3, "number of epochs")
 flags.DEFINE_integer("batch_size", 100, "mini-batch for training ")
 flags.DEFINE_integer("image_size", 128, "size of input image")
 flags.DEFINE_integer("kernel_size", 3, "size of kernel in convolution and deconcolution")
@@ -26,7 +26,7 @@ flags.DEFINE_integer("num_categories", 7, "number of num_categories(age groups) 
 flags.DEFINE_integer("num_gen_channels", 2048, "# number of channels of the first deconv layer of generator")
 flags.DEFINE_string("dataset_dir", "/media/huangrui/cacd/cacd_mtcnn128", "Path to dataset")
 flags.DEFINE_string("list_file", "/media/huangrui/cacd/cacd_mtcnn128_train.txt", "Path to list_file")
-flags.DEFINE_string("save_dir", "save", "path to save checkpoints, samples and summary")
+flags.DEFINE_string("save_dir", "save_pair201761", "path to save checkpoints, samples and summary")
 flags.DEFINE_string("mode", "train", "train or test")
 
 a = flags.FLAGS
@@ -58,7 +58,7 @@ def main(_):
                 mode = a.mode
             )
 
-            model.train()
+            model.train(num_epochs=a.epoch)
 
 
 if __name__ == '__main__':

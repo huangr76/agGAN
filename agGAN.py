@@ -45,7 +45,8 @@ class agGAN(object):
         self.num_person = 1876
 
         # *********************************input to graph****************************************
-        image_list = get_dataset(self.dataset_dir, self.list_file)
+        #image_list = get_dataset(self.dataset_dir, self.list_file)
+        image_list = get_dataset_pair(self.dataset_dir, self.list_file)
         assert len(image_list) > 0, 'The dataset should not be empty'
         self.data_size = len(image_list)
         print('num of images', len(image_list))
@@ -67,34 +68,69 @@ class agGAN(object):
                 label_age = split.values[2]
                 label_age = tf.string_to_number(label_age, tf.int32)
                 """
-                fname, label_id, label_age = tf.decode_csv(records=row, record_defaults=[["string"], [""], [""]], field_delim=" ")
-                label_id = tf.string_to_number(label_id, tf.int32)
-                label_age = tf.string_to_number(label_age, tf.int32)
-
+                sfname, slabel_id, slabel_age, dfname, dlabel_id, dlabel_age = tf.decode_csv(records=row, 
+                                                        record_defaults=[["string"], [""], [""], ["string"], [""], [""]], field_delim=" ")
+                slabel_id = tf.string_to_number(slabel_id, tf.int32)
+                slabel_age = tf.string_to_number(slabel_age, tf.int32)
+                dlabel_id = tf.string_to_number(dlabel_id, tf.int32)
+                dlabel_age = tf.string_to_number(dlabel_age, tf.int32)
+                
+                
                 #read image
-                contents = tf.read_file(fname)
+                s_contents = tf.read_file(sfname)
+                d_contents = tf.read_file(dfname)
                 decode = tf.image.decode_jpeg
-                raw_input = decode(contents)
-                #scale to 0~1
-                raw_input = tf.image.convert_image_dtype(raw_input, dtype=tf.float32)
-                image = transform(raw_input)
-                images_and_labels.append([image, label_id, label_age])
 
-            self.input_batch, self.label_id_batch, self.label_age_batch = tf.train.batch_join(images_and_labels, batch_size=self.batch_size,
-                                                    shapes=[(self.image_size, self.image_size, self.num_input_channels), (), ()],
+                sraw_input = decode(s_contents)
+                draw_input = decode(d_contents)
+                #scale to 0~1
+                sraw_input = tf.image.convert_image_dtype(sraw_input, dtype=tf.float32)
+                draw_input = tf.image.convert_image_dtype(draw_input, dtype=tf.float32)
+                s_image = transform(sraw_input)
+                d_image = transform(draw_input)
+                images_and_labels.append([s_image, slabel_id, slabel_age, d_image, dlabel_id, dlabel_age])
+
+            self.sinput_batch, self.slabel_id_batch, self.slabel_age_batch, \
+            self.dinput_batch, self.dlabel_id_batch, self.dlabel_age_batch = tf.train.batch_join(images_and_labels, batch_size=self.batch_size,
+                                                    shapes=[(self.image_size, self.image_size, self.num_input_channels), (), (), 
+                                                    (self.image_size, self.image_size, self.num_input_channels), (), ()],
                                                     capacity=4 * num_preprocess_threads * self.batch_size, allow_smaller_final_batch=True)
+        
+        """
+        #************************************run time********************************************
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
+
+        tf.global_variables_initializer().run()
+        step = 0
+        for i in range(100):
+            rsfname, rdfname, rinput_batch= self.session.run([sfname, dfname, self.dinput_batch])
+            print(rinput_batch.shape)
+            #print(rsfname, rdfname)
+            #print(rlabel_id_fake)
+
+            #summary = self.summary.eval()
+            #step += 1
+            #self.writer.add_summary(summary, step)
+
+        
+        coord.request_stop()
+        coord.join(threads)
+        """
+        
 
         #*************************************build the graph************************************
         with tf.variable_scope('generator'):
             #encoder input image -> logits_id logits_age logits_id_classify
-            self.logits_age, self.logits_id, self.logits_id_classify = self.encoder(self.input_batch)
+            self.logits_age, self.logits_id, self.logits_id_classify = self.encoder(self.sinput_batch)
 
-            #decoder: z + label_age -> generated image
-            self.G = self.decoder(self.logits_id, self.label_age_batch)
+            #decoder: z + dlabel_age -> generated image
+            self.G = self.decoder(self.logits_id, self.dlabel_age_batch)
 
         with tf.variable_scope('discriminator'):
             # discriminator on input image
-            self.D_input_logits_id, self.D_input_logits_age = self.discriminator(self.input_batch, is_training=self.mode=='train')
+            self.D_input = tf.concat([self.sinput_batch, self.dinput_batch], axis=0)
+            self.D_input_logits_id, self.D_input_logits_age = self.discriminator(self.D_input, is_training=self.mode=='train')
 
             # discriminator on G
             self.D_G_logits_id, self.D_G_logits_age = self.discriminator(self.G, is_training=self.mode=='train', reuse_variables=True)
@@ -110,36 +146,39 @@ class agGAN(object):
         
         with tf.name_scope('encoder_loss'):
             self.E_loss_age = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.label_age_batch, logits=self.logits_age))
+                labels=self.slabel_age_batch, logits=self.logits_age))
 
             self.E_loss_id = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.label_id_batch, logits=self.logits_id_classify))
+                labels=self.slabel_id_batch, logits=self.logits_id_classify))
 
             #loss of encoder
             self.loss_E = self.E_loss_id + self.E_loss_age
 
         with tf.name_scope('generator_loss'):
-            self.G_loss_L1 = tf.reduce_mean(tf.abs(self.input_batch - self.G)) #L1 loss
+            self.G_loss_L1 = tf.reduce_mean(tf.abs(self.dinput_batch - self.G)) #L1 loss
 
             self.G_fake_loss_id = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.label_id_batch, logits=self.D_G_logits_id))
+                labels=self.dlabel_id_batch, logits=self.D_G_logits_id))
 
             self.G_fake_loss_age = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.label_age_batch, logits=self.D_G_logits_age))
+                labels=self.dlabel_age_batch, logits=self.D_G_logits_age))
 
             #loss of generator
-            self.loss_G = self.G_loss_L1 + self.G_fake_loss_id + self.G_fake_loss_age + self.tv_loss
-
+            #self.loss_G = self.G_loss_L1 + self.G_fake_loss_id + self.G_fake_loss_age + self.tv_loss
+            self.loss_G = self.G_fake_loss_id + self.G_fake_loss_age + self.tv_loss
+        
         with tf.name_scope('discriminator_loss'):
             #real image
+            self.label_id = tf.concat([self.slabel_id_batch, self.dlabel_id_batch], axis=0)
             self.D_real_loss_id = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.label_id_batch, logits=self.D_input_logits_id))
+                labels=self.label_id, logits=self.D_input_logits_id))
 
+            self.label_age = tf.concat([self.slabel_age_batch, self.dlabel_age_batch], axis=0)
             self.D_real_loss_age = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.label_age_batch, logits=self.D_input_logits_age))
+                labels=self.label_age, logits=self.D_input_logits_age))
 
             #fake image
-            label_id_fake = tf.ones_like(self.label_id_batch) * self.num_person
+            label_id_fake = tf.ones_like(self.slabel_id_batch) * self.num_person
             self.D_fake_loss_id = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=label_id_fake, logits=self.D_G_logits_id))
             
@@ -159,7 +198,7 @@ class agGAN(object):
         self.D_variables = [var for var in trainable_variables if 'D_' in var.name]
         print(len(self.E_variables), len(self.De_variables), len(self.D_variables))
 
-
+        
         #*************************************collect the summary**************************************
         self.logits_age_summary = tf.summary.histogram('logits_age', self.logits_age)
         self.logits_id_summary = tf.summary.histogram('logits_id', self.logits_id)
@@ -184,7 +223,6 @@ class agGAN(object):
 
         #for saving graph and variables
         self.saver = tf.train.Saver(max_to_keep=0)
-
 
         """
         #************************************run time********************************************
@@ -211,11 +249,11 @@ class agGAN(object):
         """
 
     def train(self,
-              num_epochs = 100, #number of epoch
+              num_epochs = 5, #number of epoch
               learning_rate = 0.0002, #initial learning rate
               display_freq = 1000,
               summary_freq = 100,
-              save_freq = 5000,
+              save_freq = 20000,
               ):
         #*********************************** optimizer *******************************************************
         global_step = tf.Variable(0, trainable=False, name='global_step')
@@ -333,7 +371,8 @@ class agGAN(object):
                 }
 
                 if should(display_freq):
-                    fetches['input_batch'] = self.input_batch
+                    fetches['sinput_batch'] = self.sinput_batch
+                    fetches['dinput_batch'] = self.dinput_batch
                     fetches['G'] = self.G
 
                 if should(summary_freq):
@@ -343,8 +382,10 @@ class agGAN(object):
 
                 if should(display_freq):
                     print("saving display images")
-                    name = '{:06d}_input.png'.format(global_step.eval())
-                    self.save_image_batch(results['input_batch'], name)
+                    name = '{:06d}_sinput.png'.format(global_step.eval())
+                    self.save_image_batch(results['sinput_batch'], name)
+                    name = '{:06d}_dinput.png'.format(global_step.eval())
+                    self.save_image_batch(results['dinput_batch'], name)
                     name = '{:06d}_generated.png'.format(global_step.eval())
                     self.save_image_batch(results['G'], name)
 
@@ -378,8 +419,8 @@ class agGAN(object):
                 )
                 """
 
-                print('\nEpoch: [%d/%d] Batch: [%d/%d] G_err=%.4f E_err=%.4f D_err=%.4f' %
-                    (epoch+1, num_epochs, batch_ind+1, num_batch_per_epoch, results['G_err'], results['E_err'], results['D_err']))
+                print('\nEpoch: [%d/%d] Batch: [%d/%d] iter: [%d] G_err=%.4f E_err=%.4f D_err=%.4f' %
+                    (epoch+1, num_epochs, batch_ind+1, num_batch_per_epoch, global_step.eval(), results['G_err'], results['E_err'], results['D_err']))
                 print('\tG_L1_err=%.4f G_fake_id_err=%.4f G_fake_age_err=%.4f tv_err=%.4f' %
                     (results['G_L1_err'], results['G_fake_id_err'], results['G_fake_age_err'], results['tv_err']))
                 print('\tE_id_err=%.4f E_age_err=%.4f' % (results['E_id_err'], results['E_age_err']))
@@ -388,8 +429,8 @@ class agGAN(object):
                 #estimate left run time
                 elapse = time.time() - start_time
                 time_left = ((num_epochs - epoch - 1) * num_batch_per_epoch + (num_batch_per_epoch - batch_ind - 1)) * elapse
-                print("\tTime left: %02d:%02d:%02d" %
-                      (int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60))
+                print("\t%.2fs/iter Time left: %02d:%02d:%02d" %
+                      (elapse, int(time_left / 3600), int(time_left % 3600 / 60), time_left % 60))
 
                 
 
@@ -565,7 +606,7 @@ class agGAN(object):
         # fully connection layer
         name = 'D_fc'
         current = fc(
-            input_vector=tf.reshape(current, [self.batch_size, 2*2*2048]),
+            input_vector=tf.reshape(current, [-1, 2*2*2048]),
             num_output_length=1024,
             name=name
         )
